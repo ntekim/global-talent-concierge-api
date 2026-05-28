@@ -1,0 +1,199 @@
+{
+  "name": "GlobalTalent Relocation",
+  "description": "Multi-stage agentic case for global talent relocation. Orchestrates document verification, compliance checking, human approvals, and relocation guide generation across AI agents and HR staff.",
+  "version": "1.0.0",
+  "track": 1,
+  "stages": [
+    {
+      "id": "intake",
+      "name": "Intake",
+      "description": "Candidate case is received and queued for processing. Files are uploaded and case metadata is captured.",
+      "type": "automatic",
+      "entry_actions": [
+        {
+          "type": "webhook",
+          "url": "https://<your-server>/api/webhooks/maestro/document-verify",
+          "method": "POST",
+          "body": { "case_id": "{{case.id}}", "action": "start-document-verify", "payload": {} }
+        }
+      ],
+      "transitions": [
+        { "to": "document_verification", "condition": "always" }
+      ]
+    },
+    {
+      "id": "document_verification",
+      "name": "Document Verification",
+      "description": "AI agent (DocSentry) extracts fields from uploaded documents. Supports passports, visas, employment letters, bank statements via OCR + LLM.",
+      "type": "automatic",
+      "exception_paths": [
+        {
+          "to": "document_renewal",
+          "condition": "Any document has date_errors (expired)"
+        },
+        {
+          "to": "manual_review",
+          "condition": "Document extraction fails or confidence < 60%"
+        }
+      ],
+      "transitions": [
+        { "to": "compliance_check", "condition": "All documents VERIFIED" }
+      ]
+    },
+    {
+      "id": "document_renewal",
+      "name": "Document Renewal",
+      "description": "Expired documents detected. Case is paused for candidate to provide renewed documents. HR is notified via Slack with interactive buttons.",
+      "type": "human",
+      "assigned_role": "HR Specialist",
+      "actions": [
+        { "type": "slack_notification", "channel": "hr-team", "template": "document-renewal-needed" },
+        { "type": "webhook", "url": "https://<your-server>/api/webhooks/maestro/document-verify", "method": "POST", "body": { "case_id": "{{case.id}}", "action": "reverify", "payload": {} } }
+      ],
+      "transitions": [
+        { "to": "document_verification", "condition": "New documents uploaded" },
+        { "to": "rejected", "condition": "Case cancelled" }
+      ]
+    },
+    {
+      "id": "manual_review",
+      "name": "Manual Review",
+      "description": "AI confidence was low or documents failed OCR. An HR specialist reviews the extracted data and approves or rejects.",
+      "type": "human",
+      "assigned_role": "HR Specialist",
+      "actions": [
+        { "type": "slack_notification", "channel": "hr-team", "template": "manual-review-required", "interactive": true },
+        { "type": "task", "title": "Review candidate documents", "description": "Verify the extracted document fields and approve or request corrections." }
+      ],
+      "transitions": [
+        { "to": "compliance_check", "condition": "HR approves", "action": "POST /api/webhooks/maestro/hr-decision with APPROVE" },
+        { "to": "rejected", "condition": "HR rejects", "action": "POST /api/webhooks/maestro/hr-decision with REJECT" },
+        { "to": "info_requested", "condition": "More info needed" }
+      ]
+    },
+    {
+      "id": "compliance_check",
+      "name": "Compliance Check",
+      "description": "AI agent (ComplianceAgent) checks documents against destination country visa rules using RAG (ChromaDB) + live Brave web search.",
+      "type": "automatic",
+      "entry_actions": [
+        {
+          "type": "webhook",
+          "url": "https://<your-server>/api/webhooks/maestro/compliance-check",
+          "method": "POST",
+          "body": { "case_id": "{{case.id}}", "action": "run-compliance", "payload": {} }
+        }
+      ],
+      "exception_paths": [
+        {
+          "to": "compliance_remediation",
+          "condition": "Compliance status is FAIL"
+        }
+      ],
+      "transitions": [
+        { "to": "hr_review", "condition": "Compliance PASS" }
+      ]
+    },
+    {
+      "id": "compliance_remediation",
+      "name": "Compliance Remediation",
+      "description": "Compliance check failed. HR reviews the reasons and decides whether to request new documents, escalate, or override.",
+      "type": "human",
+      "assigned_role": "HR Manager",
+      "actions": [
+        { "type": "slack_notification", "channel": "hr-team", "template": "compliance-fail", "interactive": true }
+      ],
+      "transitions": [
+        { "to": "compliance_check", "condition": "New documents provided" },
+        { "to": "hr_review", "condition": "HR overrides" },
+        { "to": "escalated", "condition": "Escalated to senior management" },
+        { "to": "rejected", "condition": "HR rejects" }
+      ]
+    },
+    {
+      "id": "hr_review",
+      "name": "HR Review",
+      "description": "Final human approval gate. HR manager reviews compliance results and candidate profile, then approves or rejects.",
+      "type": "human",
+      "assigned_role": "HR Manager",
+      "actions": [
+        { "type": "slack_notification", "channel": "hr-management", "template": "compliance-pass", "interactive": true },
+        { "type": "task", "title": "Approve or reject relocation case", "description": "Review the compliance check results and candidate profile before making a final decision." }
+      ],
+      "transitions": [
+        { "to": "relocation_planning", "condition": "HR approves" },
+        { "to": "rejected", "condition": "HR rejects" },
+        { "to": "escalated", "condition": "Escalated" }
+      ]
+    },
+    {
+      "id": "relocation_planning",
+      "name": "Relocation Planning",
+      "description": "AI agent (RelocationAgent) generates a personalized relocation guide with neighbourhoods, schools, cost estimates, and a 30-day checklist.",
+      "type": "automatic",
+      "entry_actions": [
+        {
+          "type": "webhook",
+          "url": "https://<your-server>/api/webhooks/maestro/relocation-guide",
+          "method": "POST",
+          "body": { "case_id": "{{case.id}}", "action": "generate-guide", "payload": {} }
+        }
+      ],
+      "transitions": [
+        { "to": "completed", "condition": "Guide generated" }
+      ]
+    },
+    {
+      "id": "completed",
+      "name": "Completed",
+      "description": "All stages complete. Relocation guide delivered. Case closed.",
+      "type": "terminal"
+    },
+    {
+      "id": "rejected",
+      "name": "Rejected",
+      "description": "Case rejected by HR. Candidate notified.",
+      "type": "terminal"
+    },
+    {
+      "id": "escalated",
+      "name": "Escalated",
+      "description": "Case escalated to senior management for resolution.",
+      "type": "human",
+      "assigned_role": "Senior Management"
+    },
+    {
+      "id": "info_requested",
+      "name": "Info Requested",
+      "description": "Additional information requested from candidate. Case pauses until response received.",
+      "type": "human",
+      "assigned_role": "HR Specialist",
+      "transitions": [
+        { "to": "manual_review", "condition": "Response received" }
+      ]
+    }
+  ],
+  "actors": [
+    { "id": "system", "name": "System", "type": "automation" },
+    { "id": "doc_sentry", "name": "DocSentry Agent", "type": "ai_agent", "framework": "python_openai" },
+    { "id": "compliance_agent", "name": "ComplianceAgent", "type": "ai_agent", "framework": "python_openai_rag" },
+    { "id": "relocation_agent", "name": "RelocationAgent", "type": "ai_agent", "framework": "python_openai_rag" },
+    { "id": "hr_specialist", "name": "HR Specialist", "type": "human" },
+    { "id": "hr_manager", "name": "HR Manager", "type": "human" },
+    { "id": "sr_management", "name": "Senior Management", "type": "human" },
+    { "id": "candidate", "name": "Candidate", "type": "external" }
+  ],
+  "integrations": [
+    {
+      "type": "webhook",
+      "name": "GlobalTalent API",
+      "base_url": "https://<your-server>",
+      "description": "Python backend server hosting AI agents and case management API"
+    },
+    {
+      "type": "slack",
+      "name": "HR Slack Workspace",
+      "description": "Slack integration for notifications and interactive approvals (Approve/Reject/Request Info)"
+    }
+  ]
+}
