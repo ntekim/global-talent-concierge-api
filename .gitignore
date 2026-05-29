@@ -1,0 +1,31 @@
+# Environment
+.env
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Vector database (auto-generated)
+globaltalent/chroma_db/
+
+# Agent cache
+agent_cache.json
+
+# Database
+cases.db
+cases.db-shm
+cases.db-wal
+
+# Uploaded files
+uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
